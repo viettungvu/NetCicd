@@ -29,5 +29,10 @@ namespace NetCicd.Controllers
             })
             .ToArray();
         }
+        [HttpGet(Name = "hello")]
+        public string Hello()
+        {
+            return "Hello from NetCiCd";
+        }
     }
 }
