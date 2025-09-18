@@ -7,6 +7,7 @@
     <UserSecretsId>a511bffd-8ea4-4eed-84af-56d9151714b8</UserSecretsId>
     <DockerDefaultTargetOS>Windows</DockerDefaultTargetOS>
     <DockerfileContext>.</DockerfileContext>
+	  <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
   </PropertyGroup>
 
   <ItemGroup>
