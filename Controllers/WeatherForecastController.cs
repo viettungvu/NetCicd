@@ -32,7 +32,7 @@ namespace NetCicd.Controllers
         [HttpGet("hello", Name = "hello")]
         public string Hello()
         {
-            return "Hello from NetCiCd " + DateTime.Now;
+            return "Hello from NetCiCd Server 211" + DateTime.Now;
         }
     }
 }
