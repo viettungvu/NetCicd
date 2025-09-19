@@ -34,5 +34,10 @@ namespace NetCicd.Controllers
         {
             return "Hello from NetCiCd Server 211" + DateTime.Now;
         }
+        [HttpGet("hello-jenkins")]
+        public string HelloJenkins()
+        {
+            return "HelloJenkins from NetCiCd Server 211" + DateTime.Now;
+        }
     }
 }
