@@ -9,6 +9,7 @@
 		IIS_APP_POOL = 'jenkins-demo'
         IIS_SERVER = 'localhost'  // IP/hostname IIS server (thay bằng remote nếu cần)
 		IIS_DEPLOY_PATH = 'D:\\Jenkins\\demo'
+		ZIP_FILE = 'publish.zip'
         // Thêm credentials nếu remote: withCredentials([usernamePassword(credentialsId: 'iis-creds', ...)])
     }
 
@@ -123,12 +124,60 @@
             steps {
                 script {
                     try {
-                        // Copy publish folder đến thư mục mới
-                        bat """
-                            xcopy /Y /E /I ${PUBLISH_DIR} "${IIS_DEPLOY_PATH}\\"
+						// Backup thư mục website hiện tại
+                        powershell """
+                            \$timestamp = Get-Date -Format "yyyyMMdd_HHmm"
+                            \$backupPath = "${IIS_DEPLOY_PATH}_backup_\$timestamp"
+                            if (Test-Path '${IIS_DEPLOY_PATH}') {
+                                Write-Output "Sao lưu thư mục ${IIS_DEPLOY_PATH} sang \$backupPath..."
+                                Copy-Item -Path '${IIS_DEPLOY_PATH}' -Destination \$backupPath -Recurse -Force -ErrorAction Stop
+                                Write-Output "Backup thành công sang \$backupPath."
+                            } else {
+                                Write-Output "Thư mục ${IIS_DEPLOY_PATH} chưa tồn tại, không cần backup."
+                            }
                         """
 
-                        // PowerShell để kiểm tra và restart AppPool/Site
+                        // Zip thư mục publish
+                        powershell """
+                            if (Test-Path '${PUBLISH_DIR}') {
+                                Write-Output "Nén thư mục ${PUBLISH_DIR} thành ${ZIP_FILE}..."
+                                Compress-Archive -Path '${PUBLISH_DIR}\\*' -DestinationPath '${ZIP_FILE}' -Force -ErrorAction Stop
+                                Write-Output "Nén thành công thành ${ZIP_FILE}."
+                            } else {
+                                Write-Error "Thư mục ${PUBLISH_DIR} không tồn tại!"
+                                exit 1
+                            }
+                        """
+
+                        // Copy file zip vào thư mục website
+                        powershell """
+                            if (Test-Path '${ZIP_FILE}') {
+                                Write-Output "Copy ${ZIP_FILE} sang ${IIS_DEPLOY_PATH}..."
+                                Copy-Item -Path '${ZIP_FILE}' -Destination '${IIS_DEPLOY_PATH}\\${ZIP_FILE}' -Force -ErrorAction Stop
+                                Write-Output "Copy thành công."
+                            } else {
+                                Write-Error "File ${ZIP_FILE} không tồn tại!"
+                                exit 1
+                            }
+                        """
+
+                        // Giải nén file zip vào thư mục website
+                        powershell """
+                            \$zipPath = "${IIS_DEPLOY_PATH}\\${ZIP_FILE}"
+                            if (Test-Path \$zipPath) {
+                                Write-Output "Giải nén \$zipPath vào ${IIS_DEPLOY_PATH}..."
+                                Expand-Archive -Path \$zipPath -DestinationPath '${IIS_DEPLOY_PATH}' -Force -ErrorAction Stop
+                                Write-Output "Giải nén thành công."
+                                # Xóa file zip sau khi giải nén
+                                Remove-Item -Path \$zipPath -Force
+                                Write-Output "Đã xóa file \$zipPath."
+                            } else {
+                                Write-Error "File \$zipPath không tồn tại!"
+                                exit 1
+                            }
+                        """
+
+                        // Kiểm tra và restart AppPool/Site
                         powershell """
                             Import-Module WebAdministration -ErrorAction Stop
 
@@ -168,9 +217,15 @@
             post {
                 success {
                     echo 'Bước Deploy hoàn tất. Ứng dụng sẵn sàng trên IIS.'
+                    // Xóa thư mục publish sau khi deploy thành công
+                    bat """
+                        if exist "${PUBLISH_DIR}" rmdir /s /q "${PUBLISH_DIR}"
+                        echo "Đã xóa thư mục ${PUBLISH_DIR}."
+                    """
                 }
                 failure {
                     echo 'Bước Deploy thất bại. Kiểm tra logs để biết chi tiết.'
+                    // Không xóa thư mục nếu deploy thất bại để debug
                 }
             }
         }
