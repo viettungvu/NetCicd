@@ -1,195 +1,193 @@
-﻿			pipeline {
+﻿pipeline {
     agent any
-    
+
     environment {
-        DOTNET_VERSION = '8.0.x'
-        PROJECT_NAME = 'NetCicd'
-        SOLUTION_PATH = 'src/NetCicd/NetCicd.csproj'
-        PUBLISH_PATH = 'publish'
-        DEPLOY_PATH = 'C:\\inetpub\\wwwroot\\NetCicd'
-        IIS_SITE_NAME = 'NetCicd'
+        DOTNET_VERSION = '8.0.x'  // Phiên bản .NET SDK
+        SOLUTION_PATH = 'NetCicd.sln'  // Đường dẫn solution file
+        PUBLISH_DIR = 'publish'  // Folder output publish
+        IIS_SITE_NAME = 'jenkins-demo'  // Tên IIS site
+		IIS_APP_POOL = 'jenkins-demo'
+        IIS_SERVER = 'localhost'  // IP/hostname IIS server (thay bằng remote nếu cần)
+		IIS_DEPLOY_PATH = 'D:\\Jenkins\\demo'
+        // Thêm credentials nếu remote: withCredentials([usernamePassword(credentialsId: 'iis-creds', ...)])
     }
-    
-    tools {
-        // Cần cài đặt .NET SDK trên Jenkins node
-        dotnet 'dotnet-8'
-    }
-    
+
     stages {
-        stage('Checkout') {
+        stage('Checkout Source Code') {
             steps {
-                // Checkout code từ GitHub
-                checkout scm
-                
-                // Hiển thị thông tin commit
                 script {
-                    def commitInfo = sh(returnStdout: true, script: 'git log -1 --pretty=format:"%h - %an: %s"').trim()
-                    echo "Building commit: ${commitInfo}"
-                }
-            }
-        }
-        
-        stage('Restore Dependencies') {
-            steps {
-                echo 'Restoring NuGet packages...'
-                bat 'dotnet restore'
-            }
-        }
-        
-        stage('Build') {
-            steps {
-                echo 'Building the application...'
-                bat 'dotnet build --configuration Release --no-restore'
-            }
-        }
-        
-        
-        stage('Code Quality Analysis') {
-            steps {
-                echo 'Running code analysis...'
-                // SonarQube analysis (nếu có)
-                script {
-                    if (fileExists('sonar-project.properties')) {
-                        bat 'dotnet sonarscanner begin /k:"${PROJECT_NAME}"'
-                        bat 'dotnet build'
-                        bat 'dotnet sonarscanner end'
+                    try {
+                        checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/viettungvu/NetCicd.git']])  // Checkout từ GitHub
+                        echo "Checkout thành công từ ${env.GIT_URL}"
+                    } catch (Exception e) {
+                        error "Checkout thất bại: ${e.message}"
                     }
                 }
             }
+            post {
+                success {
+                    echo 'Bước Checkout hoàn tất.'
+                }
+                failure {
+                    echo 'Bước Checkout thất bại. Dừng pipeline.'
+                }
+            }
         }
-        
+
+        stage('Restore Dependencies') {
+            steps {
+                script {
+                    try {
+                        bat "dotnet restore ${SOLUTION_PATH}"  // Hoặc sh nếu Linux
+                        echo "Restore dependencies thành công."
+                    } catch (Exception e) {
+                        error "Restore thất bại: ${e.message}"
+                    }
+                }
+            }
+            post {
+                success {
+                    echo 'Bước Restore hoàn tất.'
+                }
+                failure {
+                    echo 'Bước Restore thất bại. Dừng pipeline.'
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                script {
+                    try {
+                        bat "dotnet build ${SOLUTION_PATH} --configuration Release --no-restore"
+                        echo "Build thành công."
+                    } catch (Exception e) {
+                        error "Build thất bại: ${e.message}"
+                    }
+                }
+            }
+            post {
+                success {
+                    echo 'Bước Build hoàn tất.'
+                }
+                failure {
+                    echo 'Bước Build thất bại. Dừng pipeline.'
+                }
+            }
+        }
+
+        stage('Test') {  // Optional, thêm nếu có unit tests
+            steps {
+                script {
+                    try {
+                        bat "dotnet test ${SOLUTION_PATH} --configuration Release --no-build --logger trx"
+                        echo "Test thành công."
+                    } catch (Exception e) {
+                        error "Test thất bại: ${e.message}"
+                    }
+                }
+            }
+            post {
+                success {
+                    echo 'Bước Test hoàn tất.'
+                }
+                failure {
+                    echo 'Bước Test thất bại. Dừng pipeline.'  // Hoặc unstable nếu muốn tiếp tục
+                }
+            }
+        }
+
         stage('Publish') {
             steps {
-                echo 'Publishing the application...'
-                bat """
-                    dotnet publish "${SOLUTION_PATH}" ^
-                    --configuration Release ^
-                    --output "${PUBLISH_PATH}" ^
-                    --no-build ^
-                    --verbosity normal
-                """
-            }
-        }
-        
-        stage('Archive Artifacts') {
-            steps {
-                // Lưu trữ artifacts
-                archiveArtifacts(
-                    artifacts: "${PUBLISH_PATH}/**",
-                    allowEmptyArchive: false,
-                    fingerprint: true
-                )
-            }
-        }
-        
-        stage('Deploy to Staging') {
-            when {
-                branch 'develop'
-            }
-            steps {
-                echo 'Deploying to staging environment...'
                 script {
-                    deployToEnvironment('staging')
+                    try {
+                        bat "dotnet publish ${SOLUTION_PATH} --configuration Release --output ${PUBLISH_DIR} --no-build"
+                        echo "Publish thành công vào folder ${PUBLISH_DIR}."
+                    } catch (Exception e) {
+                        error "Publish thất bại: ${e.message}"
+                    }
+                }
+            }
+            post {
+                success {
+                    echo 'Bước Publish hoàn tất. Archive artifacts.'
+                    archiveArtifacts artifacts: "${PUBLISH_DIR}/**", allowEmptyArchive: false
+                }
+                failure {
+                    echo 'Bước Publish thất bại. Dừng pipeline.'
                 }
             }
         }
-        
-        stage('Deploy to Production') {
-            when {
-                branch 'main'
-            }
+
+        stage('Deploy to IIS') {
             steps {
-                input message: 'Deploy to Production?', ok: 'Deploy'
-                echo 'Deploying to production environment...'
                 script {
-                    deployToEnvironment('production')
+                    try {
+                        // Copy publish folder đến thư mục mới
+                        bat """
+                            xcopy /Y /E /I ${PUBLISH_DIR} "${IIS_DEPLOY_PATH}\\"
+                        """
+
+                        // PowerShell để kiểm tra và restart AppPool/Site
+                        powershell """
+                            Import-Module WebAdministration -ErrorAction Stop
+
+                            # Kiểm tra thư mục deploy tồn tại
+                            if (-not (Test-Path '${IIS_DEPLOY_PATH}')) {
+                                Write-Error 'Thư mục ${IIS_DEPLOY_PATH} không tồn tại!'
+                                exit 1
+                            }
+
+                            # Kiểm tra AppPool tồn tại
+                            if (Get-WebAppPoolState -Name '${IIS_APP_POOL}' -ErrorAction SilentlyContinue) {
+                                Write-Output 'AppPool ${IIS_APP_POOL} tồn tại. Restarting...'
+                                Restart-WebAppPool -Name '${IIS_APP_POOL}' -ErrorAction Stop
+                            } else {
+                                Write-Error 'AppPool ${IIS_APP_POOL} không tồn tại!'
+                                exit 1
+                            }
+
+                            # Kiểm tra Site tồn tại
+                            if (Get-Website -Name '${IIS_SITE_NAME}' -ErrorAction SilentlyContinue) {
+                                Write-Output 'Site ${IIS_SITE_NAME} tồn tại. Restarting...'
+                                Stop-Website -Name '${IIS_SITE_NAME}' -ErrorAction Stop
+                                Start-Website -Name '${IIS_SITE_NAME}' -ErrorAction Stop
+                            } else {
+                                Write-Error 'Site ${IIS_SITE_NAME} không tồn tại!'
+                                exit 1
+                            }
+
+                            Write-Output 'Deploy và restart IIS thành công.'
+                        """
+                        echo "Deploy lên IIS thành công."
+                    } catch (Exception e) {
+                        error "Deploy thất bại: ${e.message}"
+                    }
+                }
+            }
+            post {
+                success {
+                    echo 'Bước Deploy hoàn tất. Ứng dụng sẵn sàng trên IIS.'
+                }
+                failure {
+                    echo 'Bước Deploy thất bại. Kiểm tra logs để biết chi tiết.'
                 }
             }
         }
     }
-    
+
     post {
         always {
-            echo 'Pipeline completed!'
-            // Cleanup workspace
-            cleanWs()
+            echo 'Pipeline kết thúc. Kiểm tra logs để xem chi tiết.'
+            // Cleanup nếu cần: bat "rmdir /s /q ${PUBLISH_DIR}"
         }
-        
         success {
-            echo 'Pipeline succeeded!'
-            // Gửi thông báo thành công
-            script {
-                if (env.CHANGE_ID) {
-                    // Pull Request
-                    pullRequest.comment("✅ Build #${BUILD_NUMBER} succeeded!")
-                }
-            }
+            echo 'Toàn bộ pipeline thành công!'
+            // Gửi email/slack notification nếu cần
         }
-        
         failure {
-            echo 'Pipeline failed!'
-            // Gửi email thông báo lỗi
-            emailext(
-                subject: "❌ Build Failed: ${JOB_NAME} - ${BUILD_NUMBER}",
-                body: """
-                Build failed for ${JOB_NAME} - ${BUILD_NUMBER}
-                
-                Branch: ${BRANCH_NAME}
-                Commit: ${GIT_COMMIT}
-                
-                Check console output: ${BUILD_URL}
-                """,
-                to: "${env.CHANGE_AUTHOR_EMAIL ?: 'admin@company.com'}"
-            )
+            echo 'Pipeline thất bại. Kiểm tra bước lỗi.'
+            // Gửi alert
         }
     }
-}
-
-// Function để deploy tới các environment khác nhau
-def deployToEnvironment(environment) {
-    echo "Deploying to ${environment} environment..."
-    
-    // Stop IIS site
-    bat """
-        powershell -Command "Import-Module WebAdministration; Stop-WebSite -Name '${IIS_SITE_NAME}' -ErrorAction SilentlyContinue"
-    """
-    
-    // Backup current version
-    bat """
-        powershell -Command "
-            \\$backupPath = '${DEPLOY_PATH}_backup_' + (Get-Date -Format 'yyyyMMdd_HHmmss')
-            if (Test-Path '${DEPLOY_PATH}') {
-                Copy-Item -Path '${DEPLOY_PATH}' -Destination \\$backupPath -Recurse
-                Write-Host 'Backup created at: ' + \\$backupPath
-            }
-        "
-    """
-    
-    // Deploy new version
-    bat """
-        powershell -Command "
-            if (Test-Path '${DEPLOY_PATH}') {
-                Remove-Item -Path '${DEPLOY_PATH}\\*' -Recurse -Force -Exclude 'Logs'
-            } else {
-                New-Item -ItemType Directory -Path '${DEPLOY_PATH}' -Force
-            }
-            Copy-Item -Path '${PUBLISH_PATH}\\*' -Destination '${DEPLOY_PATH}' -Recurse -Force
-        "
-    """
-    
-    // Start IIS site
-    bat """
-        powershell -Command "Import-Module WebAdministration; Start-WebSite -Name '${IIS_SITE_NAME}'"
-    """
-    
-    // Health check
-    sleep(10)
-    script {
-        def response = bat(returnStatus: true, script: 'curl -f http://localhost/health')
-        if (response != 0) {
-            error("Health check failed!")
-        }
-    }
-    
-    echo "Deployment to ${environment} completed successfully!"
 }

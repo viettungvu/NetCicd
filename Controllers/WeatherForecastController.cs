@@ -18,7 +18,7 @@ namespace NetCicd.Controllers
             _logger = logger;
         }
 
-        [HttpGet(Name = "GetWeatherForecast")]
+        [HttpGet("GetWeatherForecast", Name = "GetWeatherForecast")]
         public IEnumerable<WeatherForecast> Get()
         {
             return Enumerable.Range(1, 5).Select(index => new WeatherForecast
@@ -29,7 +29,7 @@ namespace NetCicd.Controllers
             })
             .ToArray();
         }
-        [HttpGet(Name = "hello")]
+        [HttpGet("hello", Name = "hello")]
         public string Hello()
         {
             return "Hello from NetCiCd " + DateTime.Now;
