@@ -1,24 +1,25 @@
 ﻿pipeline {
     agent any
-
     environment {
-        DOTNET_VERSION = '8.0.x'  // Phiên bản .NET SDK
-        SOLUTION_PATH = 'NetCicd.sln'  // Đường dẫn solution file
-        PUBLISH_DIR = 'publish'  // Folder output publish
-        IIS_SITE_NAME = 'jenkins-demo'  // Tên IIS site
-		IIS_APP_POOL = 'jenkins-demo'
-        IIS_SERVER = 'localhost'  // IP/hostname IIS server (thay bằng remote nếu cần)
-		IIS_DEPLOY_PATH = 'D:\\Jenkins\\demo'
-		ZIP_FILE = 'publish.zip'
-        // Thêm credentials nếu remote: withCredentials([usernamePassword(credentialsId: 'iis-creds', ...)])
+        DOTNET_VERSION = '8.0.x' // Phiên bản .NET SDK
+        BRANCH='master'
+        GIT_URL = 'https://github.com/viettungvu/NetCicd.git' // Đường dẫn project file
+        SOLUTION_PATH = 'NetCicd.csproj' // Đường dẫn project file
+        PUBLISH_DIR = 'publish' // Folder output publish
+        DEPLOY_SERVER = '123.30.238.37'
+        DEPLOY_DIR = 'E:\\AppTools\\DemoJenkins'
+        SERVICE_NAME='XM.ATS.DemoJenkins'
+		SERVICE_EXCUTABLE='NetCicd.exe'
+        ZIP_FILE = 'publish.zip'
+        CREDENTIAL_ID='deploy-credential-37'
+        // Di chuyển BACKUP_ZIP vào script PowerShell để generate timestamp động
     }
-
     stages {
         stage('Checkout Source Code') {
             steps {
                 script {
                     try {
-                        checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/viettungvu/NetCicd.git']])  // Checkout từ GitHub
+                        checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/viettungvu/NetCicd.git']]) // Checkout từ GitHub
                         echo "Checkout thành công từ ${env.GIT_URL}"
                     } catch (Exception e) {
                         error "Checkout thất bại: ${e.message}"
@@ -34,12 +35,11 @@
                 }
             }
         }
-
         stage('Restore Dependencies') {
             steps {
                 script {
                     try {
-                        bat "dotnet restore ${SOLUTION_PATH}"  // Hoặc sh nếu Linux
+                        bat "dotnet restore ${SOLUTION_PATH}" // Hoặc sh nếu Linux
                         echo "Restore dependencies thành công."
                     } catch (Exception e) {
                         error "Restore thất bại: ${e.message}"
@@ -55,7 +55,6 @@
                 }
             }
         }
-
         stage('Build') {
             steps {
                 script {
@@ -76,33 +75,17 @@
                 }
             }
         }
-
-        stage('Test') {  // Optional, thêm nếu có unit tests
-            steps {
-                script {
-                    try {
-                        bat "dotnet test ${SOLUTION_PATH} --configuration Release --no-build --logger trx"
-                        echo "Test thành công."
-                    } catch (Exception e) {
-                        error "Test thất bại: ${e.message}"
-                    }
-                }
-            }
-            post {
-                success {
-                    echo 'Bước Test hoàn tất.'
-                }
-                failure {
-                    echo 'Bước Test thất bại. Dừng pipeline.'  // Hoặc unstable nếu muốn tiếp tục
-                }
-            }
-        }
-
+        
         stage('Publish') {
             steps {
                 script {
                     try {
                         bat "dotnet publish ${SOLUTION_PATH} --configuration Release --output ${PUBLISH_DIR} --no-build"
+                        // Tạo file ZIP từ thư mục publish
+                        bat """
+                            powershell Compress-Archive -Path '${PUBLISH_DIR}\\*' -DestinationPath '${ZIP_FILE}' -Force
+                            echo "Đã tạo file ZIP: ${ZIP_FILE}"
+                        """
                         echo "Publish thành công vào folder ${PUBLISH_DIR}."
                     } catch (Exception e) {
                         error "Publish thất bại: ${e.message}"
@@ -112,103 +95,85 @@
             post {
                 success {
                     echo 'Bước Publish hoàn tất. Archive artifacts.'
-                    archiveArtifacts artifacts: "${PUBLISH_DIR}/**", allowEmptyArchive: false
+                    archiveArtifacts artifacts: "${ZIP_FILE}", allowEmptyArchive: false
                 }
                 failure {
                     echo 'Bước Publish thất bại. Dừng pipeline.'
                 }
             }
         }
-
         stage('Deploy to IIS') {
             steps {
                 script {
                     try {
-						// Backup thư mục website hiện tại
-                        powershell """
-                            \$timestamp = Get-Date -Format "yyyyMMdd_HHmm"
-                            \$backupPath = "${IIS_DEPLOY_PATH}_backup_\$timestamp"
-                            if (Test-Path '${IIS_DEPLOY_PATH}') {
-                                Write-Output "Sao lưu thư mục ${IIS_DEPLOY_PATH} sang \$backupPath..."
-                                Copy-Item -Path '${IIS_DEPLOY_PATH}' -Destination \$backupPath -Recurse -Force -ErrorAction Stop
-                                Write-Output "Backup thành công sang \$backupPath."
-                            } else {
-                                Write-Output "Thư mục ${IIS_DEPLOY_PATH} chưa tồn tại, không cần backup."
-                            }
-                        """
-
-                        // Zip thư mục publish
-                        powershell """
-                            if (Test-Path '${PUBLISH_DIR}') {
-                                Write-Output "Nén thư mục ${PUBLISH_DIR} thành ${ZIP_FILE}..."
-                                Compress-Archive -Path '${PUBLISH_DIR}\\*' -DestinationPath '${ZIP_FILE}' -Force -ErrorAction Stop
-                                Write-Output "Nén thành công thành ${ZIP_FILE}."
-                            } else {
-                                Write-Error "Thư mục ${PUBLISH_DIR} không tồn tại!"
-                                exit 1
-                            }
-                        """
-
-                        // Copy file zip vào thư mục website
-                        powershell """
-                            if (Test-Path '${ZIP_FILE}') {
-                                Write-Output "Copy ${ZIP_FILE} sang ${IIS_DEPLOY_PATH}..."
-                                Copy-Item -Path '${ZIP_FILE}' -Destination '${IIS_DEPLOY_PATH}\\${ZIP_FILE}' -Force -ErrorAction Stop
-                                Write-Output "Copy thành công."
-                            } else {
-                                Write-Error "File ${ZIP_FILE} không tồn tại!"
-                                exit 1
-                            }
-                        """
-
-                        // Giải nén file zip vào thư mục website
-                        powershell """
-                            \$zipPath = "${IIS_DEPLOY_PATH}\\${ZIP_FILE}"
-                            if (Test-Path \$zipPath) {
-                                Write-Output "Giải nén \$zipPath vào ${IIS_DEPLOY_PATH}..."
-                                Expand-Archive -Path \$zipPath -DestinationPath '${IIS_DEPLOY_PATH}' -Force -ErrorAction Stop
-                                Write-Output "Giải nén thành công."
-                                # Xóa file zip sau khi giải nén
-                                Remove-Item -Path \$zipPath -Force
-                                Write-Output "Đã xóa file \$zipPath."
-                            } else {
-                                Write-Error "File \$zipPath không tồn tại!"
-                                exit 1
-                            }
-                        """
-
-                        // Kiểm tra và restart AppPool/Site
-                        powershell """
-                            Import-Module WebAdministration -ErrorAction Stop
-
-                            # Kiểm tra thư mục deploy tồn tại
-                            if (-not (Test-Path '${IIS_DEPLOY_PATH}')) {
-                                Write-Error 'Thư mục ${IIS_DEPLOY_PATH} không tồn tại!'
-                                exit 1
-                            }
-
-                            # Kiểm tra AppPool tồn tại
-                            if (Get-WebAppPoolState -Name '${IIS_APP_POOL}' -ErrorAction SilentlyContinue) {
-                                Write-Output 'AppPool ${IIS_APP_POOL} tồn tại. Restarting...'
-                                Restart-WebAppPool -Name '${IIS_APP_POOL}' -ErrorAction Stop
-                            } else {
-                                Write-Error 'AppPool ${IIS_APP_POOL} không tồn tại!'
-                                exit 1
-                            }
-
-                            # Kiểm tra Site tồn tại
-                            if (Get-Website -Name '${IIS_SITE_NAME}' -ErrorAction SilentlyContinue) {
-                                Write-Output 'Site ${IIS_SITE_NAME} tồn tại. Restarting...'
-                                Stop-Website -Name '${IIS_SITE_NAME}' -ErrorAction Stop
-                                Start-Website -Name '${IIS_SITE_NAME}' -ErrorAction Stop
-                            } else {
-                                Write-Error 'Site ${IIS_SITE_NAME} không tồn tại!'
-                                exit 1
-                            }
-
-                            Write-Output 'Deploy và restart IIS thành công.'
-                        """
-                        echo "Deploy lên IIS thành công."
+                        withCredentials([usernamePassword(credentialsId: 'deploy-credential-37', usernameVariable: 'DEPLOY_USER', passwordVariable: 'DEPLOY_PASS')]) {
+                            powershell """
+                                \$securePass = ConvertTo-SecureString \$env:DEPLOY_PASS -AsPlainText -Force
+                                \$cred = New-Object System.Management.Automation.PSCredential (\$env:DEPLOY_USER, \$securePass)
+                                \$session = New-PSSession -ComputerName ${DEPLOY_SERVER} -Credential \$cred -Authentication Basic # Hoặc Kerberos nếu domain
+                                \$backupZip = "backup-\$(Get-Date -Format 'yyyyMMdd-HHmmss').zip"
+                                # Kiểm tra và tạo thư mục DEPLOY_DIR nếu không tồn tại
+                                Invoke-Command -Session \$session -ScriptBlock {
+                                    if (!(Test-Path '${DEPLOY_DIR}')) {
+                                        New-Item -ItemType Directory -Path '${DEPLOY_DIR}' -Force | Out-Null
+                                        Write-Output 'Đã tạo thư mục ${DEPLOY_DIR}'
+                                    }
+                                }
+                                
+                                # Copy zip sang deploy server
+                                Copy-Item -ToSession \$session -Path "${ZIP_FILE}" -Destination "${DEPLOY_DIR}\\${ZIP_FILE}" -Force
+                                Write-Output 'Đã copy file ZIP sang server'
+                                
+                                # Kiểm tra service tồn tại trước khi stop (nếu không tồn tại thì skip)
+                                \$serviceExists = Invoke-Command -Session \$session -ScriptBlock { 
+                                    \$svc = Get-Service -Name '${SERVICE_NAME}' -ErrorAction SilentlyContinue
+                                    return \$null -ne \$svc
+                                }
+                                
+                                if (\$serviceExists) {
+                                    Invoke-Command -Session \$session -ScriptBlock { 
+                                        Stop-Service -Name '${SERVICE_NAME}' -Force -ErrorAction SilentlyContinue 
+                                        Write-Output 'Đã stop service ${SERVICE_NAME}'
+                                    }
+                                } else {
+									Write-Output 'Service ${SERVICE_NAME} không tồn tại, sẽ tạo mới'
+									# Tạo service mới
+									Invoke-Command -Session $session -ScriptBlock { 
+										$exePath = Join-Path '${DEPLOY_DIR}' '{SERVICE_EXCUTABLE}'
+										if (Test-Path $exePath) {
+											New-Service -Name '${SERVICE_NAME}' -BinaryPathName $exePath -StartupType Automatic -DisplayName '${SERVICE_NAME}' | Out-Null
+											Write-Output "Đã tạo service ${SERVICE_NAME} từ $exePath"
+										} else {
+											throw "File exe không tồn tại: $exePath"
+										}
+									}
+                                }
+                                
+                                # Giải nén zip mới
+                                Invoke-Command -Session \$session -ScriptBlock { 
+                                    Expand-Archive -Path '${DEPLOY_DIR}\\${ZIP_FILE}' -DestinationPath '${DEPLOY_DIR}' -Force 
+                                    Write-Output 'Đã giải nén file ZIP mới'
+                                }
+                                # Start service
+								Invoke-Command -Session \$session -ScriptBlock { 
+									Start-Service -Name '${SERVICE_NAME}' -ErrorAction SilentlyContinue
+									Write-Output 'Đã start service ${SERVICE_NAME}'
+								}
+                                
+                                # Kiểm tra service running và xóa zip nếu thành công
+                                \$status = Invoke-Command -Session \$session -ScriptBlock { (Get-Service -Name '${SERVICE_NAME}').Status }
+                                if (\$status -eq 'Running') {
+                                    Invoke-Command -Session \$session -ScriptBlock { 
+                                        Remove-Item -Path '${DEPLOY_DIR}\\${ZIP_FILE}' -Force -ErrorAction SilentlyContinue 
+                                    }
+                                    Write-Output "Deploy thành công, xóa zip."
+                                } else {
+                                    throw "Service không start được! Status: \$status"
+                                }
+                                
+                                Remove-PSSession \$session
+                            """
+                        }
                     } catch (Exception e) {
                         error "Deploy thất bại: ${e.message}"
                     }
@@ -217,10 +182,11 @@
             post {
                 success {
                     echo 'Bước Deploy hoàn tất. Ứng dụng sẵn sàng trên IIS.'
-                    // Xóa thư mục publish sau khi deploy thành công
+                    // Xóa thư mục publish và ZIP sau khi deploy thành công
                     bat """
                         if exist "${PUBLISH_DIR}" rmdir /s /q "${PUBLISH_DIR}"
-                        echo "Đã xóa thư mục ${PUBLISH_DIR}."
+                        if exist "${ZIP_FILE}" del "${ZIP_FILE}"
+                        echo "Đã xóa thư mục ${PUBLISH_DIR} và file ${ZIP_FILE}."
                     """
                 }
                 failure {
@@ -230,7 +196,6 @@
             }
         }
     }
-
     post {
         always {
             echo 'Pipeline kết thúc. Kiểm tra logs để xem chi tiết.'
